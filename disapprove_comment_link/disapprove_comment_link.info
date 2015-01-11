@@ -1,0 +1,6 @@
+name = Disapprove Comment Link
+description = Provides "disapprove" link for comments.
+core = 7.x
+dependencies[] = comment
+dependencies[] = views
+files[] = includes/disapprove_comment_link_handler_comment_link_disapprove.inc

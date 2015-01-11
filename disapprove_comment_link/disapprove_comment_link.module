@@ -1,0 +1,88 @@
+<?php
+
+/**
+ * @file
+ * Provides disapprove link for users comments on published content.
+ */
+
+/**
+ * Implements hook_views_api().
+ */
+function disapprove_comment_link_views_api() {
+  return array('api' => 3);
+}
+
+
+/**
+ * Implements hook_menu().
+ */
+function disapprove_comment_link_menu() {
+  $items['comment/%/disapprove'] = array(
+    'title' => 'Disapprove',
+    'page callback' => 'disapprove_comment_link_disapprove',
+    'page arguments' => array(1),
+    'access arguments' => array('administer comments'),
+    'file' => 'disapprove_comment_link.pages.inc',
+    'weight' => 1,
+  );
+
+  return $items;
+}
+
+
+/**
+ * Implements hook_comment_view().
+ *
+ * The content built for the comment (field values, comments, file attachments
+ * or other comment components) will vary depending on the $view_mode parameter.
+ *
+ * @param object $comment
+ *   A comment object.
+ * @param string $view_mode
+ *   View mode, e.g. 'full', 'teaser'...
+ * @param string $langcode
+ *   (optional) A language code to use for rendering. Defaults to the global
+ *   content language of the current request.
+ */
+function disapprove_comment_link_comment_view($comment, $view_mode = 'full', $langcode = NULL) {
+  $node = node_load($comment->nid);
+  $links = $comment->content['links']['comment']['#links'];
+  if (empty($comment->in_preview)) {
+    $comment->content['links']['comment'] = array(
+      '#theme' => 'links__comment__comment',
+      '#links' => disapprove_comment_link_comment_links($comment, $node, $links),
+      '#attributes' => array('class' => array('links', 'inline')),
+    );
+  }
+}
+
+/**
+ * Helper function, build links for an individual comment.
+ *
+ * Adds disapprove link depending on the current user permissions.
+ *
+ * @param object $comment
+ *   The comment object.
+ * @param object $node
+ *   The node the comment is attached to.
+ * @param array $links
+ *   Array of already existed links.
+ *
+ * @return array
+ *   A structured array of links.
+ */
+function disapprove_comment_link_comment_links($comment, $node, $links) {
+  if ($node->comment == COMMENT_NODE_OPEN) {
+    if (user_access('administer comments') && user_access('post comments')) {
+      if ($comment->status !== COMMENT_NOT_PUBLISHED) {
+        $links['comment-disapprove'] = array(
+          'title' => t('disapprove'),
+          'href' => "comment/$comment->cid/disapprove",
+          'html' => TRUE,
+          'query' => array('token' => drupal_get_token("comment/$comment->cid/disapprove")),
+        );
+      }
+    }
+  }
+  return $links;
+}
