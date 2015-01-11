@@ -1,0 +1,6 @@
+name= IIP Image
+description = Integration of IIPImage with proper image converting.
+core = 7.x
+dependencies[] = image
+dependencies[] = lightbox2
+dependencies[] = imagemagick

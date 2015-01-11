@@ -1,0 +1,412 @@
+<?php
+
+/**
+ * @file
+ * Main module file for the iip image module.
+ * Provides settings page, validation, formatting, image convertion, resizing
+ */
+
+
+/**
+ * Implements hook_field_widget_info().
+ */
+function iip_image_field_widget_info() {
+  return array(
+    'iip_image_widget' => array(
+      'label' => t('Image for IIP'),
+      'field types' => array('image'),
+      'settings' => array(
+        'progress_indicator' => 'throbber',
+        'preview_image_style' => 'thumbnail',
+        'thumbnail_iip_resolution' => array('x' => 150, 'y' => 150),
+        'tile_size' => '64x64',
+      ),
+      'default_formatter' => 'image IIP',
+      'behaviors' => array(
+        'multiple values' => FIELD_BEHAVIOR_CUSTOM,
+        'default value' => FIELD_BEHAVIOR_NONE,
+      ),
+    ),
+  );
+}
+/**
+ * Implements hook_field_widget_settings_form().
+ */
+function iip_image_field_widget_settings_form($field, $instance) {
+  $widget = $instance['widget'];
+  $settings = $widget['settings'];
+  // Use the file widget settings form.
+  $form = file_field_widget_settings_form($field, $instance);
+
+  // Add maximum and minimum resolution settings.
+  $thumbnail_iip_resolution = $settings['thumbnail_iip_resolution'];
+  $form['thumbnail_iip_resolution'] = array(
+    '#type' => 'item',
+    '#title' => t('Thumbnail resolution'),
+    '#weight' => 6,
+    '#field_prefix' => '<div class="container-inline">',
+    '#field_suffix' => '</div>',
+    '#description' => t('The maximum allowed thumbnail size expressed as WIDTHxHEIGHT (e.g. 640x480). Leave blank for no restriction. If a larger image is uploaded, it will be resized to reflect the given width and height.'),
+  );
+  $form['thumbnail_iip_resolution']['x'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Maximum width'),
+    '#title_display' => 'invisible',
+    '#default_value' => $thumbnail_iip_resolution['x'],
+    '#size' => 5,
+    '#maxlength' => 5,
+    '#field_suffix' => ' x ',
+  );
+  $form['thumbnail_iip_resolution']['y'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Maximum height'),
+    '#title_display' => 'invisible',
+    '#default_value' => $thumbnail_iip_resolution['y'],
+    '#size' => 5,
+    '#maxlength' => 5,
+    '#field_suffix' => ' ' . t('pixels'),
+  );
+  $form['tile_size'] = array(
+    '#type' => 'textfield',
+    '#title' => t('TIFF tile size for IIP converting'),
+    '#default_value' => $settings['tile_size'],
+    '#description' => t('Enter a value like "256x256" to define Tiled Pyramid TIFF  - multi-resolution format for IIP Server. Increasing/decreasing this value will affect on resulting TIFF filesize.'),
+    '#size' => 10,
+    '#element_validate' => array('_iip_image_settings_tile_size'),
+    '#weight' => 5,
+  );
+
+  return $form;
+}
+
+/**
+ * Element validate callback for the tile size field.
+ */
+function _iip_image_settings_tile_size($element, &$form_state) {
+  $size = explode('x', $element['#value']);
+  if (!empty($element['#value']) && (!is_numeric($size['0']) || !is_numeric($size['1']))) {
+    form_error($element, t('The tile size option must contain a valid value. You may either leave the text field empty to set it 64x64 or enter a string like "256x256"'));
+  }
+}
+
+/**
+ * Implements hook_field_widget_form().
+ */
+function iip_image_field_widget_form(&$form, &$form_state, $field, $instance, $langcode, $items, $delta, $element) {
+
+  // Add display_field setting to field because file_field_widget_form() assumes
+  // it is set.
+  $field['settings']['display_field'] = 0;
+
+  $elements = file_field_widget_form($form, $form_state, $field, $instance, $langcode, $items, $delta, $element);
+  $settings = $instance['settings'];
+
+  foreach (element_children($elements) as $delta) {
+    // Add upload resolution validation.
+    if ($settings['max_resolution'] || $settings['min_resolution']) {
+      $elements[$delta]['#upload_validators']['file_validate_image_resolution'] = array($settings['max_resolution'], $settings['min_resolution']);
+    }
+
+    // If not using custom extension validation, ensure this is an image.
+    $supported_extensions = array('png', 'gif', 'jpg', 'jpeg', 'tif');
+    $extensions = isset($elements[$delta]['#upload_validators']['file_validate_extensions'][0]) ? $elements[$delta]['#upload_validators']['file_validate_extensions'][0] : implode(' ', $supported_extensions);
+    $extensions = array_intersect(explode(' ', $extensions), $supported_extensions);
+    $elements[$delta]['#upload_validators']['file_validate_extensions'][0] = implode(' ', $extensions);
+
+    // Add all extra functionality provided by the image widget.
+    $elements[$delta]['#process'][] = 'iip_image_widget_process';
+  }
+
+  if ($field['cardinality'] == 1) {
+    // If there's only one field, return it as delta 0.
+    if (empty($elements[0]['#default_value']['fid'])) {
+      $elements[0]['#description'] = theme('file_upload_help', array('description' => $instance['description'], 'upload_validators' => $elements[0]['#upload_validators']));
+    }
+  }
+  else {
+    $elements['#file_upload_description'] = theme('file_upload_help', array('upload_validators' => $elements[0]['#upload_validators']));
+  }
+  return $elements;
+}
+
+/**
+ * An element #process callback for the iip_image field type.
+ */
+function iip_image_widget_process($element, &$form_state, $form) {
+  $item = $element['#value'];
+  $item['fid'] = $element['fid']['#value'];
+
+  $instance = $form_state['field'][$element['#field_name']][$element['#language']]['instance'];
+  $settings = $instance['settings'];
+  $widget_settings = $instance['widget']['settings'];
+  $element['#theme'] = 'image_widget';
+  $element['#attached']['css'][] = drupal_get_path('module', 'image') . '/image.css';
+  if ($element['#file']) {
+    // Do conversion of the file.
+    _iip_image_file_convert($element['#file'], $widget_settings['tile_size']);
+
+    // Create a preview image from original picture.
+    $preview = _iip_image_resize($element['#file']->uri, $widget_settings['thumbnail_iip_resolution'], $settings['file_directory']);
+
+    // Make a preview.
+    $element['preview'] = array(
+      '#type' => 'markup',
+      '#markup' => theme('image', array(
+                           'path' => $preview,
+                           'getsize' => FALSE,
+                           'attributes' => array('class' => 'preview-existing'))),
+    );
+  }
+  // Prepend submit handler to remove button.
+  array_unshift($element['remove_button']['#submit'], 'iip_image_widget_delete');
+  return $element;
+}
+
+/**
+ * An element #submit callback to remove button.
+ */
+function iip_image_widget_delete($form, &$form_state) {
+  $parents = array_slice($form_state['triggering_element']['#array_parents'], 0, -1);
+  $element = drupal_array_get_nested_value($form_state['values'], $parents);
+  $orig = file_load($element['fid']);
+  $conv = file_load($element['fid']);
+  // Change path to converted/original file.
+  $conv->uri = drupal_substr($conv->uri, 0, strrpos($conv->uri, ".")) . '.tif';
+  // Make valid path to files.
+  $conv->uri = str_replace(conf_path() . '/files', 'public:/', $conv->uri);
+  $orig->uri = str_replace(conf_path() . '/files', 'public:/', $orig->uri);
+  // Delete file usage.
+  file_usage_delete($orig, 'file');
+  // Deleting original image.
+  file_delete($orig);
+  // Deleting converted image.
+  file_delete($conv);
+}
+
+/**
+ * Implements hook_field_formatter_info().
+ */
+function iip_image_field_formatter_info() {
+  $formatters = array(
+    'image IIP' => array(
+      'label' => t('Image IIP_formatter'),
+      'field types' => array('image'),
+      'settings' => array('image_style' => '', 'image_link' => ''),
+    ),
+  );
+
+  return $formatters;
+}
+
+/**
+ * Implements hook_field_formatter_settings_form().
+ */
+function iip_image_field_formatter_settings_form($field, $instance, $view_mode, $form, &$form_state) {
+  $display = $instance['display'][$view_mode];
+  $settings = $display['settings'];
+
+  $image_styles = image_style_options(FALSE);
+  $element['image_style'] = array(
+    '#title' => t('Image style'),
+    '#type' => 'select',
+    '#default_value' => $settings['image_style'],
+    '#empty_option' => t('None (original image)'),
+    '#options' => $image_styles,
+  );
+
+  $link_types = array(
+    'image_IIP' => t('Image IIP'),
+  );
+  $element['image_link'] = array(
+    '#title' => t('Link image to'),
+    '#type' => 'select',
+    '#default_value' => $settings['image_link'],
+    '#options' => $link_types,
+  );
+
+  return $element;
+}
+
+/**
+ * Implements hook_field_formatter_settings_summary().
+ */
+function iip_image_field_formatter_settings_summary($field, $instance, $view_mode) {
+  return image_field_formatter_settings_summary($field, $instance, $view_mode);
+}
+/**
+ * Implements hook_field_formatter_view().
+ */
+function iip_image_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
+  $element = array();
+  // Check if the formatter involves a link.
+  foreach ($items as $delta => $item) {
+    if (isset($link_file)) {
+      $uri = array(
+        'path' => file_create_url($item['uri']),
+        'options' => array(),
+      );
+    }
+    if ($instance['settings']['file_directory']) {
+      $item['uri'] = drupal_substr($item['uri'], strripos($item['uri'], '/' . $instance['settings']['file_directory']));
+    }
+    $element[$delta] = array(
+      '#theme' => 'image_formatter',
+      '#item' => $item,
+      '#image_style' => $display['settings']['image_style'],
+      '#path' => array('path' => 'image_iip/' . $item['fid'], 'options' => array('attributes' => array('rel' => 'lightframe'))),
+    );
+  }
+  return $element;
+}
+
+/**
+ * Perform image resizing to create thumbnail.
+ *
+ * string @param $src
+ *   URI of the image to be resized.
+ *
+ * string @return
+ *   Path to resized image.
+ *
+ * @see image_load()
+ * @see image_scale()
+ */
+function _iip_image_resize($src, $res, $dir) {
+  $filename = strrchr($src, '/');
+  $dst = 'public://styles/thumbnail/public/' . $dir . $filename;
+  $image = image_load($src);
+  if ($image) {
+    $result = image_scale($image, $width = $res['x'], $height = $res['y'], $upscale = FALSE);
+    $result = image_save($image, $dst ? $dst : $src);
+    $result = str_replace('public:/', variable_get('file_public_path', conf_path() . '/files'), $dst);
+    return $result;
+  }
+
+  return FALSE;
+}
+
+/**
+ * Do converting for the given file.
+ *
+ * object @param $file
+ *   Object that contains all the data about the uploaded file.
+ *
+ * @see shell_exec()
+ */
+function _iip_image_file_convert($file, $tilesize) {
+  $extensions = array('image/jpg', 'image/jpeg', 'image/gif', 'image/png');
+
+  // Slice name, path and extension from file.
+  $image_info = pathinfo($file->uri);
+  $image_ext = $image_info['extension'];
+  $image_name = $image_info['filename'] . ".";
+  $image_path = drupal_substr($file->uri, 0, strrpos($file->uri, '.')) . '.';
+  $image_path = str_replace('public:/', conf_path() . '/files', $image_path);
+
+  if (in_array($file->filemime, $extensions)) {
+    $image_dest = 'tif';
+    // Execute convert operation
+    // shell_exec('convert ' . $image_path . $image_ext . ' -define tiff:tile-geometry=' . $tilesize . ' -compress jpeg "ptif:' . $image_path . $image_dest . '"');
+    _imagemagick_convert_exec($image_path . $image_ext . ' -define tiff:tile-geometry=' . $tilesize . ' -compress jpeg "ptif:' . $image_path . $image_dest . '"');
+  }
+  else {
+    $image_dest = 'jpg';
+    // Execute convert operation
+    // shell_exec('convert ' . $image_path . $image_ext . '[0] -compress jpeg ' . $image_path . $image_dest . '');
+    _imagemagick_convert_exec($image_path . $image_ext . '[0] -compress jpeg ' . $image_path . $image_dest . '');
+  }
+
+  // Re-write object with a new properties.
+  $file->filename = $image_name . $image_dest;
+  $file->destination = $image_path . $image_dest;
+  $full_path = drupal_realpath(variable_get('file_public_path', conf_path() . '/files'));
+  if (!in_array($file->filemime, $extensions)) {
+    $file->uri = str_replace(conf_path() . '/files', 'public:/', $image_path . $image_dest);
+    $file->filemime = 'image/jpeg';
+    $file->filesize = filesize(str_replace('public:/', $full_path, $image_path . $image_dest));
+    // Update database with a new converted file.
+    $query = db_update('file_managed');
+    $query
+      ->fields(array(
+          'uri' => $file->uri,
+          'filename' => $file->filename,
+          'filemime' => $file->filemime,
+          'filesize' => $file->filesize)
+        )
+      ->condition('fid', $file->fid);
+    $query->execute();
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function iip_image_menu() {
+  $items['image_iip/%'] = array(
+    'title' => 'IIP',
+    'access callback' => TRUE,
+    'access arguments' => array(1),
+    'page callback' => 'iip_image_output_page',
+    'page arguments' => array(1),
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+/**
+ * Page callback function for the iip_image menu item.
+ */
+function iip_image_output_page($id) {
+  // Check if everything we need to include is available.
+  if (!file_exists('sites/all/libraries/iip_image/css/iip.compressed.css')) {
+    $output = "iip.compressed.css file is missing. Please follow the instructions and put the missing file in appropriate folder.";
+  }
+  elseif (!file_exists('sites/all/libraries/iip_image/images/')) {
+    $output = "'libraries/iip_image/images' directory is missing. Please follow the instructions and put the missing files in appropriate folder.";
+  }
+  elseif (!file_exists('sites/all/libraries/iip_image/javascript/mootools-1.2-core-compressed.js')) {
+    $output = "mootools-1.2-core-compressed.js file is missing. Please follow the instructions and put the missing file in appropriate folder.";
+  }
+  elseif (!file_exists('sites/all/libraries/iip_image/javascript/mootools-1.2-more-compressed.js')) {
+    $output = "mootools-1.2-more-compressed.js file is missing. Please follow the instructions and put the missing file in appropriate folder.";
+  }
+  elseif (!file_exists('sites/all/libraries/iip_image/javascript/iipmooviewer-1.1-compressed.js')) {
+    $output = "iipmooviewer-1.1-compressed.js file is missing. Please follow the instructions and put the missing file in appropriate folder.";
+  }
+  else {
+    $somepic = file_load($id);
+    if ($somepic) {
+      $somepic->uri = drupal_substr($somepic->uri, 0, strripos($somepic->uri, '.'));
+      $basepath = $_SERVER["DOCUMENT_ROOT"] . base_path();
+      $script = '
+      iip = new IIP( "targetframe", {
+      image: "' . variable_get('iip_image_picfolder', $basepath) . str_replace('public:/', variable_get('file_public_path', conf_path() . '/files'), $somepic->uri) . '.tif",
+      server: server,
+      credit: credit,
+      zoom: 1,
+      render: "random",
+      showNavButtons: true
+      });';
+      $output = '
+        <script type="text/javascript" src="' . base_path() . 'sites/all/libraries/iip_image/javascript/mootools-1.2-core-compressed.js"></script>
+        <script type="text/javascript" src="' . base_path() . 'sites/all/libraries/iip_image/javascript/mootools-1.2-more-compressed.js"></script>
+        <script type="text/javascript" src="' . base_path() . 'sites/all/libraries/iip_image/javascript/iipmooviewer-1.1-compressed.js"></script>
+        <style type="text/css" media="all">@import url("' . base_path() . 'sites/all/libraries/iip_image/css/iip.compressed.css");</style>
+        <script>
+          // The iipsrv server path (/fcgi-bin/iipsrv.fcgi by default)
+          var server = "' . variable_get('iip_image_server', '/fcgi-bin/iipsrv.fcgi') . '";
+          var credit = "' . variable_get('iip_image_copyright', '&copy; All rights reserved') . '";
+          // Create our viewer object - note: must assign this to the "iip" variable.
+          // See documentation for more details of options
+          ' . $script . '
+        </script>
+      ';
+
+      $output .= '<base href="' . base_path() . 'sites/all/libraries/iip_image/"><div style="width:99%;height:99%;margin-left:auto;margin-right:auto" class="targetframe" id="targetframe"></div>';
+    }
+    else {
+      $output = 'No file given!';
+    }
+  }
+  print $output;
+}
