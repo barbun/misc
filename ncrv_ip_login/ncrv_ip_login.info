@@ -1,0 +1,5 @@
+name = NCRV IP Login
+description = Provides a functionality to prevent user login if IP was banned.
+core = 7.x
+package = Stand.nl
+dependencies[] = ip

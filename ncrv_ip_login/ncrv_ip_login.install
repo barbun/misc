@@ -1,0 +1,47 @@
+<?php
+
+/**
+ * @file
+ * NCRV IP Login module install/schema/update hooks.
+ */
+
+/**
+ * Implements hook_install().
+ */
+function ncrv_ip_login_install() {
+}
+
+/**
+ * Implements hook_schema()
+ *
+ */
+function ncrv_ip_login_schema() {
+  $schema['ncrv_ip_login'] = array(
+    'description' => 'Stores blocked IP addresses.',
+    'fields' => array(
+       'iid' => array(
+        'description' => 'Primary Key: unique ID for IP addresses.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'ip' => array(
+        'description' => 'IP address',
+        'type' => 'varchar',
+        'length' => 40,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+    ),
+    'primary key' => array('iid'),
+  );
+  return $schema;
+}
+
+
+/**
+ * Implements of hook_uninstall()
+  */
+function ncrv_ip_login_uninstall() {
+  drupal_uninstall_schema('ncrv_ip_login');
+}
