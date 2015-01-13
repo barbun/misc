@@ -1,0 +1,289 @@
+<?php
+
+// Count of activities per page.
+define('PER_PAGE_COUNT', 5);
+
+/**
+ * Implements hook_block_info().
+ */
+function user_activities_block_info() {
+  $blocks['user_activities'] = array(
+    'info' => t('User Activities'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  $blocks['user_activities_user_info'] = array(
+    'info' => t('User Info'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  $blocks['user_small_login_block'] = array(
+    'info' => t('User Small Login Block'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function user_activities_block_view($delta) {
+  $block = array();
+  switch ($delta) {
+    case 'user_activities':
+      $block = user_activities_list();
+      break;
+    case 'user_activities_user_info':
+      $block = user_activities_user_info();
+      break;
+    case 'user_small_login_block':
+      $block = user_small_login_block();
+      break;
+  }
+  return $block;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function user_activities_theme() {
+  $items = array(
+    'activity_info' => array(
+      'template' => 'activity_info',
+      'variables' => array(
+        'link' => NULL,
+        'body' => NULL,
+        'view_link' => NULL,
+        'date' => NULL,
+      ),
+      'file' => 'inc/user_activities.theme.inc',
+    ),
+    'activity_user_info' => array(
+      'template' => 'activity_user_info',
+      'variables' => array(
+        'user' => NULL,
+        'node_count' => NULL,
+        'comment_count' => NULL,
+      ),
+      'file' => 'inc/user_activities.theme.inc',
+    ),
+  );
+  return $items;
+}
+
+/**
+ * User activities block body.
+ */
+function user_activities_list() {
+  $uid = intval(arg(1));
+
+  // Query to select nodes (Stellingen) created by user.
+  $node_query = db_select('node', 'n');
+  $node_query->fields('n', array('nid', 'title', 'created', 'type'));
+  $node_query->join('field_data_body', 'db', 'n.vid = db.revision_id');
+  $node_query->fields('db', array('body_value'));
+  $node_query->condition('n.status', '1');
+  $node_query->condition('n.type', array('statement'), 'IN');
+  $node_query->condition('n.uid', $uid);
+
+  // Query to select user comments.
+  $comment_query = db_select('comment', 'c');
+  $comment_query->fields('c', array('cid', 'subject', 'created', 'nid'));
+  $comment_query->innerJoin('node', 'nc', 'c.nid = nc.nid');
+  $comment_query->join('field_data_comment_body', 'cb', 'c.cid = cb.entity_id');
+  $comment_query->fields('cb', array('comment_body_value'));
+  $comment_query->condition('c.status', '0', '<>');
+  $comment_query->condition('c.uid', $uid);
+  $comment_query->condition('nc.status', '1');
+  $comment_query->orderBy('created', 'DESC');
+
+  // Count queries, required for pager.
+  $node_count = $node_query->countQuery()->execute()->fetchField();
+  $comment_count = $comment_query->countQuery()->execute()->fetchField();
+  $count = $node_count + $comment_count;
+
+  // Union both nodes and comments queries.
+  $comment_query->range(pager_find_page() * PER_PAGE_COUNT, PER_PAGE_COUNT);
+  $node_query->union($comment_query);
+
+  $result = $node_query->execute();
+
+  // Collect result rows.
+  $rows = array();
+  while ($row = $result->fetchObject()) {
+    if (intval($row->type)) {
+      $type = t('Reactie');
+      $link = l(strip_tags($row->title), 'node/' . $row->type, array('fragment' => 'comment-' . $row->nid, 'attributes' => array('class' => array('activity-link'))));
+      $view_link = l(t('» View comment'), 'node/' . $row->type, array('fragment' => 'comment-' . $row->nid, 'attributes' => array('class' => array('activity-view-link'))));
+    }
+    else {
+      $type = t('Statement');
+      $link = l(strip_tags($row->title), 'node/' . $row->nid, array('attributes' => array('class' => array('activity-link'))));
+      $view_link = l(t('» View statement'), 'node/' . $row->nid, array('attributes' => array('class' => array('activity-view-link'))));
+    }
+    $info = array(
+      '#theme' => 'activity_info',
+      '#link' => $link,
+      '#body' => views_trim_text(array('html' => TRUE, 'max_length' => 600, 'ellipsis' => TRUE), $row->body_value),
+      '#view_link' => $view_link,
+      '#date' => t('Created on !date at !time', array('!date' => date('d', $row->created). ' ' . t(date('F', $row->created)) . ' ' . date('Y', $row->created), '!time' => date('H:i', $row->created))),
+    );
+    $rows[] = array(
+      'data' => array(
+        array('data' => $type, 'class' => array('activity-type')),
+        array('data' => $info, 'class' => array('activity-info'))
+      )
+    );
+  }
+
+  $header = array();
+
+  pager_default_initialize($count, PER_PAGE_COUNT);
+
+  $render_array['user_activities_list'] = array(
+    '#theme' => 'table',
+    '#header' => $header,
+    '#rows' => $rows,
+    '#caption' => t('Recent activities'),
+    '#empty' => t('No recent activities'),
+  );
+  $render_array['user_activities_pager'] = array(
+    '#theme' => 'pager',
+  );
+
+  return array(
+    'content' => $render_array,
+    'title' => ''//t('Recent activities'),
+  );
+}
+
+/**
+ * User info block.
+ * Show picture, username, count of Stelling and Comments posted.
+ */
+function user_activities_user_info() {
+  $uid = intval(arg(1));
+
+  $user = user_load($uid);
+
+  $node_query = db_select('node', 'n');
+  $node_query->fields('n', array('nid'));
+  $node_query->condition('n.status', '1');
+  $node_query->condition('n.type', array('statement'), 'IN');
+  $node_query->condition('n.uid', $uid);
+  $result = $node_query->countQuery()->execute();
+  $node_count = $result->fetchField();
+
+  $comment_query = db_select('comment', 'c');
+  $comment_query->fields('c', array('cid'));
+  $comment_query->innerJoin('node', 'nc', 'c.nid = nc.nid');
+  $comment_query->condition('c.status', '0', '<>');
+  $comment_query->condition('c.uid', $uid);
+  $comment_query->condition('nc.status', '1');
+  $result = $comment_query->countQuery()->execute();
+  $comment_count = $result->fetchField();
+
+  $render_array = array(
+    '#theme' => 'activity_user_info',
+    '#user' => $user,
+    '#node_count' => $node_count,
+    '#comment_count' => $comment_count,
+  );
+
+  return array(
+    'content' => $render_array,
+    'title' => ''//t('User info'),
+  );
+}
+
+/**
+ * Returns custom user bock
+ */
+function user_small_login_block() {
+  global $user;
+  $output = '';
+  if ($user->uid) {
+    if (variable_get('user_pictures', 0)) {
+      $user_picture = user_get_picture($user, 'image_24x24');
+      $output = '<div class="user_picture">' . $user_picture . '</div>';
+    }
+    $output .= l(format_username($user), "user/{$user->uid}", array('attributes' => array('class' => array('user-block-user-name'))));
+    // Run helper function that handles destination page when you log out.
+    $output .= ncrvlogin_block_logged($user->uid);
+  }
+  else {
+    // Helper function that handles destination page when you log in.
+    $output = ncrvlogin_block_anonymous();
+  }
+  return array(
+    'content' => $output,
+  );
+}
+
+/**
+ * Returns themed user picture
+ */
+function user_get_picture(&$user, $style = FALSE, $linked = TRUE, $attributes = array()) {
+  if (!empty($user->picture)) {
+    if (is_numeric($user->picture)) {
+      $user->picture = file_load($user->picture);
+    }
+    if (!empty($user->picture->uri)) {
+      $filepath = $user->picture->uri;
+    }
+  }
+  elseif (variable_get('user_picture_default', '')) {
+    $filepath = variable_get('user_picture_default', '');
+  }
+
+  if (!empty($filepath)) {
+    $alt = t("@user's picture", array('@user' => format_username($user)));
+    // If the image does not have a valid Drupal scheme (for eg. HTTP),
+    // don't load image styles.
+    if ($style && module_exists('image')) {
+      $user_picture = theme('image_style', array('style_name' => $style, 'path' => $filepath, 'alt' => $alt, 'title' => $alt, 'attributes' => $attributes));
+    }
+    else {
+      $user_picture = theme('image', array('path' => $filepath, 'alt' => $alt, 'title' => $alt, 'class' => $style, 'attributes' => $attributes));
+    }
+    if ($linked && !empty($user->uid) && user_access('access user profiles')) {
+      $attributes = array(
+        'attributes' => array('title' => t('View user profile.')),
+        'html' => TRUE,
+      );
+      $user_picture = l($user_picture, "user/$user->uid", $attributes);
+    }
+  }
+  return $user_picture;
+}
+
+/*
+ * Helper function to provide destination handling for login block.
+ */
+function ncrvlogin_block_anonymous() {
+  $output = '<span>';
+  $output .= l('Inloggen', 'user/login', array(
+    'query'=> array('destination' => $_GET['q']),
+    'html' => true,
+    'attributes' => array('class'=> array('login-button'))));
+  $output .= ' / ';
+  $output .= l('Registreer', 'user/register');
+  $output .= '</span>';
+  return $output;
+}
+
+/*
+ * Helper function to provide destination handling for logout.
+ */
+function ncrvlogin_block_logged($user) {
+  $output = '<p>';
+  $front = variable_get('site_frontpage', 'frontpage');
+  $output .= l(t('Edit profile'), "user/$user/edit", array(
+    'html' => true,
+    'attributes' => array('class'=> array('logout-button'))));
+  $output .= ' / ';
+  $output .= l(t('Logout'), 'user/logout', array(
+    'query'=> array('destination' => $_GET['q']),
+    'html'=>true,
+    'attributes'=>array('class'=>'logout-button')));
+  $output .= '</p>';
+  return $output;
+}

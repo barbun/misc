@@ -1,0 +1,6 @@
+name = User Activities
+description = Custom implementation of users recent activities list
+core = 7.x
+package = Stand.nl
+dependencies[] = views
+dependencies[] = ip
