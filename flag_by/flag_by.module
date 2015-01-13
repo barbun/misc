@@ -1,0 +1,65 @@
+<?php
+
+/**
+ * @file
+ * Provides storage of user who flagged the content.
+ */
+
+
+/**
+ * Implements hook_flag(). Trigger actions if any are available.
+ */
+function flag_by_flag($op, $flag, $content_id, $account, $fcid) {
+  // Check if we flag or unflag.
+  if ($op == 'flag') { 
+    // Store user and content data to database.
+    $query = db_insert('flag_by')
+    ->fields(array(
+      'uid' => $account->uid,
+      'user_name' => $account->name,  
+      'content_id' => $content_id,
+      'timestamp' => REQUEST_TIME,  
+    ))
+    ->execute();
+  } 
+  elseif ($op == 'unflag') {
+    // Remove the stored user and content data from database.
+    $query = db_delete('flag_by')
+    ->condition('content_id', $content_id, '=')        
+    ->execute();
+  }  
+}
+
+
+/**
+ * Implements hook_views_pre_render().
+ */
+function flag_by_views_pre_render(&$view) {
+  // Check if the needed view.
+  if ($view->name == 'flagged_comments') {
+    // Run through results to re-write user fields.
+    foreach ($view->result as $key => $value) {
+      $user = _flag_by_find($value->flag_content_content_id, $value->flag_content_comment_timestamp);
+      if ($user) {
+        $value->users_flag_content_uid = $user['uid'];
+        $value->users_flag_content_name = $user['user_name'];
+      }  
+    }
+  }
+}
+
+
+/*
+ * Helper function to find the user who flagged the comment.
+ * 
+ */
+function _flag_by_find($cid, $timestamp) {
+  $result = db_select('flag_by', 'n')
+    ->fields('n')
+    ->condition('content_id', $cid, '=')
+    ->condition('timestamp', $timestamp, '=')
+    ->execute()
+    ->fetchAssoc();
+  
+  return $result;
+}

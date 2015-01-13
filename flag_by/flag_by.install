@@ -1,0 +1,64 @@
+<?php
+
+/**
+ * @file
+ * Flag module install/schema/update hooks.
+ */
+
+/**
+ * Implements hook_install().
+ */
+function flag_by_install() {
+}
+
+/**
+ * Implements hook_schema()
+ *
+ */
+function flag_by_schema() {
+  $schema['flag_by'] = array(
+    'description' => 'User that flagged the content.',
+    'fields' => array(
+      'timestamp' => array(
+        'description' => 'The UNIX time stamp representing when the flag was set.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'disp-size' => 11,
+      ),
+      'content_id' => array(
+        'description' => 'The unique ID of the content, such as either the {cid}, {uid}, or {nid}.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'uid' => array(
+        'description' => 'The user ID by which this content was created.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'user_name' => array(
+        'description' => 'The human-readable user name.',
+        'type' => 'varchar',
+        'length' => '255',
+        'not null' => FALSE,
+        'default' => '',
+      ),  
+    ),
+    'primary key' => array('uid'),
+  );
+  return $schema;
+}
+
+
+/**
+ * Implements of hook_uninstall()
+  */
+function flag_by_uninstall()
+{
+  drupal_uninstall_schema('flag_by');
+}

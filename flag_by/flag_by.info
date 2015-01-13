@@ -1,0 +1,7 @@
+name = Flag By
+description = Stores and provides the user who flagged the content.
+core = 7.x
+package = Flags
+dependencies[] = comment
+dependencies[] = views
+dependencies[] = flag
