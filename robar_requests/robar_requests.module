@@ -1,0 +1,193 @@
+<?php
+
+/**
+ * Implements hook_menu().
+ */
+function robar_requests_menu() {
+  $items = array();
+
+  $items['request'] = array(
+    'title' => 'Make a request',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('robar_requests_form'),
+    'access arguments' => array(1),
+    'access callback' => TRUE,  
+    'type' => MENU_NORMAL_ITEM,
+  );
+  
+  $items['artist/autocomplete'] = array(
+    'page callback' => '_artist_autocomplete',
+    'access arguments' => array(1),
+    'access callback' => TRUE,    
+    'type' => MENU_CALLBACK
+  );
+  
+  $items['song/autocomplete'] = array(
+    'page callback' => '_song_autocomplete',
+    'access arguments' => array(1),
+    'access callback' => TRUE,    
+    'type' => MENU_CALLBACK
+  );
+ 
+  return $items;
+}
+
+/**
+ * Form callback. Provide table with added languages.
+ *
+ */
+function robar_requests_form() {
+  $form = array();
+  $form['intro'] = array(
+    '#markup' => variable_get('request form intro', t('Here you can leave your request for songs you want me to cover! Unfortunately, I cannot guarantee that I will do it, but there is gonna be votings and I will definitely cover the most demanded songs. <br> So what do you have in your head?')),
+  );
+  $form['artist'] = array(
+    '#title' => t('Artist'),
+    '#type' => 'textfield',
+    '#autocomplete_path' => 'artist/autocomplete',    
+    '#description' => t("Type in the Artist or Band name.")
+  );
+
+  $form['song'] = array(
+  '#title' => t('Song'),
+  '#type' => 'textfield',
+  '#autocomplete_path' => 'song/autocomplete',
+  '#description' => t("Type in the Song name.")   
+  );
+  
+  $form['message'] = array(
+  '#title' => t('Message'),
+  '#type' => 'textarea',
+  '#description' => t("You can add a few words why you would like me to cover the song.")   
+  );
+  $form['my_captcha_element'] = array(
+    '#type' => 'captcha',
+    '#title' => 'captcha',
+    '#captcha_type' => 'captcha/Math',
+  );
+  $form['submit'] = array(
+  '#type' => 'submit',
+  '#value' => 'Request',
+  );
+
+  return $form;
+}
+
+
+function _artist_autocomplete($string){
+  $matches = array();
+  
+  // Some fantasy DB table which holds cities
+  $query = db_select('taxonomy_term_data', 'c');
+  // Select rows that match the string
+  $vocabulary = robar_get_vocabulary_by_name('Artists');
+  $return = $query
+    ->fields('c', array('name'))
+    ->condition('c.vid', $vocabulary->vid , '=')      
+    ->condition('c.name', '%' . db_like($string) . '%', 'LIKE')
+    ->range(0, 10)
+    ->execute();
+  
+  // add matches to $matches  
+  foreach ($return as $row) {
+    $matches[$row->name] = check_plain($row->name);
+  }
+  
+  // return for JS
+  drupal_json_output($matches);
+}
+
+
+function _song_autocomplete($string){
+  $matches = array();
+  
+  // Some fantasy DB table which holds cities
+  $query = db_select('taxonomy_term_data', 'c');
+  $vocabulary = robar_get_vocabulary_by_name('Songs');
+  // Select rows that match the string
+  $return = $query
+    ->fields('c', array('name'))
+    ->condition('c.vid', $vocabulary->vid , '=')      
+    ->condition('c.name', '%' . db_like($string) . '%', 'LIKE')
+    ->range(0, 10)
+    ->execute();
+  
+  // add matches to $matches  
+  foreach ($return as $row) {
+    $matches[$row->name] = check_plain($row->name);
+  }
+  
+  // return for JS
+  drupal_json_output($matches);
+}
+
+
+/**
+ * Function to valide all required fields  in the form.
+ */
+function robar_requests_form_validate($form, $form_state) {
+  if ($form_state['values']['artist']=="") {
+    form_set_error('artist', t('Please, provide the artist/band name. It cannnot be empty.'));
+  }
+  if (strlen($form_state['values']['artist']) < 2) {
+    form_set_error('artist', t('Please, make sure you typed artist/band name correctly.'));
+  }
+  if ($form_state['values']['song']=="") {
+    form_set_error('song', t('Please, provide the song name. It cannnot be empty.'));
+  }
+  if (strlen($form_state['values']['song']) < 2) {
+    form_set_error('artist', t('Please, make sure you typed song name correctly.'));
+  }
+}
+
+
+function robar_requests_form_submit($form, &$form_state) {
+  $artist = $form_state['values']['artist'];
+  $song = $form_state['values']['song'];
+  $message = $form_state['values']['message'];
+  
+  $node = new stdClass();
+  $node->type = 'requests';
+  node_object_prepare($node);
+  
+  $node->title    = $artist . ' - ' . $song . ' (' .date('Y-m-d') . ')';
+  $node->language = LANGUAGE_NONE;
+  $node->status = 0;
+
+  $node->body[$node->language][0]['value']   = $message;
+  $node->body[$node->language][0]['summary'] = text_summary($message);
+  $node->body[$node->language][0]['format']  = 'filtered_html';
+  
+  $artist_term = taxonomy_get_term_by_name($artist);
+  if (empty($artist_term) || !isset($artist_term)) {
+    taxonomy_term_save((object) array(
+      'name' => $artist,
+      'vid' => robar_get_vocabulary_by_name('Artists')->vid,
+    ));
+    $artist_term = taxonomy_get_term_by_name($artist);
+  }
+  
+  $song_term = taxonomy_get_term_by_name($song);
+  if (empty($song_term) || !isset($song_term)) {
+    taxonomy_term_save((object) array(
+      'name' => $song,
+      'vid' => robar_get_vocabulary_by_name('Songs')->vid,
+    ));
+    $song_term = taxonomy_get_term_by_name($song);
+  }
+  
+  $node->field_request_artist[$node->language][0]['tid'] = reset($artist_term)->tid;
+  $node->field_request_song[$node->language][0]['tid'] = reset($song_term)->tid;
+  
+  node_save($node);
+  // Send main to admin notifying updates.
+    $body_text = 'Hello!<br>New request was added: <br><br>';
+    $body_text .= $artist . ' - ' . $song;
+    $body_text .= '<br><br>Message:<br>' . $message;
+    $body_text .= '<br><br>Cheers,<br>System';
+    $send_from = 'requests@robarmusic.com'; 
+    $send_to = 'robarmusic@gmail.com';
+    $subject = 'RobarMusic | New Request';
+    _robar_general_custom_drupal_mail($send_from, $send_to, $subject, $body_text);
+  drupal_set_message('Thank You! Your request is stored. I will definitely consider it!');
+}

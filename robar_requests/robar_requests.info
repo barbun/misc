@@ -1,0 +1,4 @@
+name = Robar Requests
+description = Provides form for Online Quote.
+core = 7.x
+package = Custom
