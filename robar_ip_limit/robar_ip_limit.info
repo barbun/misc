@@ -1,0 +1,4 @@
+name = Robar IP Limit
+description = Prevents overactivity from the same IP.
+core = 7.x
+package = Robar

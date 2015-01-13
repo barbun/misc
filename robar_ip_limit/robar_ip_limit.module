@@ -1,0 +1,58 @@
+<?php
+
+/**
+ * @file
+ * Provides a functionality to prevent overactivity from the same IP.
+ */
+
+
+/**
+ * Implementation of hook_form_alter().
+ */
+function robar_ip_limit_form_alter(&$form, $form_state, $form_id) {
+  if ($form_id == 'robar_requests_form') {
+    array_unshift($form['#validate'], '_robar_ip_limit_add_validate');
+  }
+}
+
+
+/**
+ * Validate request form
+ *
+ */
+function _robar_ip_limit_add_validate($form, $form_state) {
+  // Query the table with banned IPs.
+  $ip = ip_address();
+  $result = db_select('robar_ip_limit', 'c')
+     ->fields('c', array('iid', 'counts','ip'))
+     ->execute()
+     ->fetchAllAssoc('iid');
+  
+  if(!empty($result)) {
+    foreach ($result as $key => $value) {
+      if ($ip == $value->ip && $value->counts > 3) {
+        form_set_error('song', t('Sorry, from your IP there were already more than 3 requests. You will be able submit requests tomorrow again!'));
+        break;
+      }
+      elseif ($ip == $value->ip && $value->counts < 4){
+        db_update('robar_ip_limit')
+         ->expression('counts', 'counts + :count', array(':count' => 1))
+         ->condition('ip', $ip)
+         ->execute();
+      }
+    }
+  } else {
+    $ip = trim($ip);
+    db_insert('robar_ip_limit')
+    ->fields(array('counts' => 1, 'ip' => $ip))
+    ->execute();
+  }
+}
+
+
+/**
+ * Implements hook_cron().
+ */
+function robar_ip_limit_cron() {
+  db_truncate('robar_ip_limit')->execute();
+}
