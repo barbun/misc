@@ -1,0 +1,64 @@
+<?php
+
+/**
+ * Implementation of hook_cron().
+ */
+function tb_term_scheduler_cron() {
+  $clear_cache = FALSE;
+  $clear_cache |= _tb_term_scheduler_publish();
+
+  if ($clear_cache) {
+    // Clear the cache so an anonymous poster can see any changes to nodes
+    cache_clear_all();
+  }
+}
+
+/**
+ * Publish scheduled terms and children nodes.
+ *
+ * @return
+ *   TRUE if any node has been published, FALSE otherwise.
+ */
+function _tb_term_scheduler_publish() {
+  $return = FALSE;
+
+  $query = new EntityFieldQuery();
+  $query
+    ->entityCondition('entity_type', 'taxonomy_term', '=')
+    ->fieldCondition('field_published', 'value', 0, '=')
+    ->fieldCondition('field_publish_on_date', 'value', 0, '>')
+    ->fieldCondition('field_publish_on_date', 'value', REQUEST_TIME, '<');
+  $result = $query->execute();
+
+  if (!empty($result['taxonomy_term'])) {
+    $tids = array();
+    foreach ($result['taxonomy_term'] as $record) {
+      $tids[] = $record->tid;
+    }
+    $terms = entity_load('taxonomy_term', $tids);
+
+    foreach ($terms as $term) {
+      $term->field_published[$term->language][0]['value'] = 1;
+      taxonomy_term_save($term);
+
+      $query = new EntityFieldQuery;
+      $result = $query
+        ->entityCondition('entity_type', 'node')
+        ->propertyCondition('type', 'collection_item')
+        ->propertyCondition('status', 0)
+        ->fieldCondition('field_item_collection', 'tid', $term->tid)
+        ->execute();
+
+      if (!empty($result['node'])) {
+        $nodes = node_load_multiple(array_keys($result['node']));
+        foreach ($nodes as $node) {
+          $node->status = 1;
+          node_save($node);
+          $return = TRUE;
+        }
+      }
+    }
+  }
+
+  return $return;
+}

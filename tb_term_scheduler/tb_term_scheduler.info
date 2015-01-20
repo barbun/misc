@@ -1,0 +1,3 @@
+name = Term Scheduler
+description = This module allows terms and their children nodes to be published on specified date.
+core = 7.x
